@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Portfolio PDF</title>
+  <style>
+    :root { --gap: 20px; --sidepad: 30px; }
+    html, body {
+      margin: 0; height: 100%; background: #000; overflow: hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    #viewer {
+      position: fixed; inset: 0;
+      display: flex; justify-content: center; align-items: center;
+    }
+    .spread {
+      display: flex; gap: var(--gap); padding: 0 var(--sidepad);
+      width: 100%; height: 100%; box-sizing: border-box;
+      justify-content: center; align-items: center;
+      opacity: 0; transition: opacity 220ms ease;
+    }
+    .spread.show { opacity: 1; }
+    canvas, .spacer { background: #000; display: block; }
+
+    /* UI overlay */
+    .ui {
+      position: fixed; inset: 0; pointer-events: none;
+    }
+    .controls {
+      position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+      display: flex; gap: 8px; pointer-events: auto;
+      background: rgba(0,0,0,.35); padding: 6px; border-radius: 10px; backdrop-filter: blur(3px);
+    }
+    .controls button {
+      appearance: none; border: 1px solid rgba(255,255,255,.2);
+      background: rgba(20,20,20,.75); color: #fff; padding: 6px 10px;
+      border-radius: 8px; cursor: pointer; font-size: 14px;
+    }
+    .controls button:hover { background: rgba(35,35,35,.85); }
+    .arrows {
+      position: absolute; top: 50%; left: 0; right: 0; transform: translateY(-50%);
+      display: flex; justify-content: space-between; padding: 0 10px; pointer-events: none;
+    }
+    .arrows button {
+      pointer-events: auto; width: 44px; height: 44px; border-radius: 999px;
+      border: 1px solid rgba(255,255,255,.2);
+      background: rgba(20,20,20,.65); color: #fff; font-size: 18px;
+    }
+    .arrows button:hover { background: rgba(35,35,35,.85); }
+
+    /* Overlay rotazione */
+    #rotate-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.9);
+      color: white; display: none; align-items: center; justify-content: center;
+      text-align: center; padding: 20px; font-size: 1.2em; z-index: 1000;
+    }
+  </style>
+</head>
+<body>
+  <div id="viewer"></div>
+
+  <!-- UI -->
+  <div class="ui" aria-hidden="true">
+    <div class="arrows">
+      <button id="btn-prev" title="Previous (←)" aria-label="Previous">⟨</button>
+      <button id="btn-next" title="Next (→)" aria-label="Next">⟩</button>
+    </div>
+    <div class="controls">
+      <button id="btn-download" title="Download PDF">⬇ Download</button>
+      <button id="btn-fullscreen" title="Toggle Fullscreen">⛶ Fullscreen</button>
+    </div>
+  </div>
+
+  <!-- Overlay rotazione -->
+  <div id="rotate-overlay">
+    Please rotate your device to <strong>landscape</strong> mode 📱↔️
+  </div>
+
+  <script type="module">
+    import * as pdfjsLib from './pdfjs/build/pdf.mjs';
+    import './pdfjs/build/pdf.worker.mjs';
+    pdfjsLib.GlobalWorkerOptions.workerSrc = './pdfjs/build/pdf.worker.mjs';
+
+    const PDF_URL = './portfolio.pdf';
+
+    const viewer   = document.getElementById('viewer');
+    const btnPrev  = document.getElementById('btn-prev');
+    const btnNext  = document.getElementById('btn-next');
+    const btnDownload = document.getElementById('btn-download');
+    const btnFullscreen = document.getElementById('btn-fullscreen');
+    const rotateOverlay = document.getElementById('rotate-overlay');
+
+    let pdfDoc = null;
+    let currentPage = 1;
+
+    function fitScale(viewport) {
+      const gap = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--gap'));
+      const sidepad = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--sidepad'));
+      const pagesAcross = 2; // [vuoto+pagina] o [pagina+pagina]
+
+      const availableW = window.innerWidth - sidepad*2 - gap*(pagesAcross-1);
+      const availableH = window.innerHeight;
+
+      const scaleForH = availableH / viewport.height;
+      const scaleForW = (availableW / pagesAcross) / viewport.width;
+      return Math.min(scaleForH, scaleForW);
+    }
+
+    async function renderPageToCanvas(page, scale) {
+      const vps = page.getViewport({ scale });
+      const ratio = window.devicePixelRatio || 1;
+
+      const canvas = document.createElement('canvas');
+      canvas.width  = Math.floor(vps.width  * ratio);
+      canvas.height = Math.floor(vps.height * ratio);
+      canvas.style.width  = `${vps.width}px`;
+      canvas.style.height = `${vps.height}px`;
+
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      await page.render({ canvasContext: ctx, viewport: vps }).promise;
+      return canvas;
+    }
+
+    async function renderSpread() {
+      const spread = document.createElement('div');
+      spread.className = 'spread';
+      viewer.innerHTML = '';
+      viewer.appendChild(spread);
+
+      if (currentPage === 1) {
+        const p = await pdfDoc.getPage(1);
+        const scale = fitScale(p.getViewport({ scale: 1 }));
+
+        const vp = p.getViewport({ scale });
+        const spacer = document.createElement('div');
+        spacer.className = 'spacer';
+        spacer.style.width = `${vp.width}px`;
+        spacer.style.height = `${vp.height}px`;
+        spread.appendChild(spacer);
+
+        const c = await renderPageToCanvas(p, scale);
+        spread.appendChild(c);
+      } else {
+        const p1 = await pdfDoc.getPage(currentPage);
+        const baseVp = p1.getViewport({ scale: 1 });
+        const scale = fitScale(baseVp);
+
+        const c1 = await renderPageToCanvas(p1, scale);
+        spread.appendChild(c1);
+
+        if (currentPage + 1 <= pdfDoc.numPages) {
+          const p2 = await pdfDoc.getPage(currentPage + 1);
+          const c2 = await renderPageToCanvas(p2, scale);
+          spread.appendChild(c2);
+        }
+      }
+
+      requestAnimationFrame(() => spread.classList.add('show'));
+      updateNavButtons();
+    }
+
+    function next() {
+      if (!pdfDoc) return;
+      if (currentPage === 1) {
+        if (pdfDoc.numPages >= 2) currentPage = 2;
+      } else if (currentPage + 2 <= pdfDoc.numPages) {
+        currentPage += 2;
+      }
+      renderSpread();
+    }
+
+    function prev() {
+      if (!pdfDoc) return;
+      if (currentPage === 1) return;
+      if (currentPage === 2) currentPage = 1;
+      else currentPage -= 2;
+      renderSpread();
+    }
+
+    function updateNavButtons() {
+      btnPrev.disabled = (currentPage === 1);
+      const more = (currentPage === 1 && pdfDoc.numPages >= 2) || (currentPage + 1 < pdfDoc.numPages);
+      btnNext.disabled = !more;
+    }
+
+    // bottoni
+    btnNext.addEventListener('click', next);
+    btnPrev.addEventListener('click', prev);
+    btnDownload.addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = PDF_URL;
+      a.download = PDF_URL.split('/').pop();
+      a.click();
+    });
+    btnFullscreen.addEventListener('click', () => {
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen().catch(err => {
+          console.warn("Fullscreen error:", err);
+        });
+      } else {
+        document.exitFullscreen();
+      }
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'ArrowRight') next();
+      if (e.key === 'ArrowLeft') prev();
+      if (e.key === 'f') btnFullscreen.click(); // scorciatoia tastiera
+    });
+
+    window.addEventListener('resize', () => {
+      renderSpread();
+      checkOrientation();
+    });
+
+    function checkOrientation() {
+      const isMobile = /Mobi|Android/i.test(navigator.userAgent);
+      if (isMobile && window.innerHeight > window.innerWidth) {
+        rotateOverlay.style.display = "flex";
+      } else {
+        rotateOverlay.style.display = "none";
+      }
+    }
+
+    (async () => {
+      pdfDoc = await pdfjsLib.getDocument(PDF_URL).promise;
+      renderSpread();
+      checkOrientation();
+    })();
+  </script>
+</body>
+</html>
